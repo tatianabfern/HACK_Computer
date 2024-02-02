@@ -1,0 +1,380 @@
+// Tatiana Fern (930009684)
+
+CHIP CPU{
+
+    IN  fromM[16],          // M value input  (M = contents of RAM[Address])
+        In[16],    	        // Instruction for execution
+        Reset;              // Signals whether to re-start the current
+                            // program (Reset==1) or continue executing
+                            // the current program (Reset==0).
+
+    OUT toM[16],            // M value output
+        writeM,             // Write to M 
+        addressM[16],       // Address in data memory (of M)
+        PCOut[16];          // address of next instruction
+
+    PARTS:
+    // Instruction bits along with the inverted versions
+    Not(in=In[0], out=notIn0);
+    Not(in=In[1], out=notIn1);
+    Not(in=In[2], out=notIn2);
+    Not(in=In[3], out=notIn3);
+    Not(in=In[4], out=notIn4);
+    Not(in=In[5], out=notIn5);
+    Not(in=In[6], out=notIn6);
+    Not(in=In[7], out=notIn7);
+    Not(in=In[8], out=notIn8);
+    Not(in=In[9], out=notIn9);
+    Not(in=In[10], out=notIn10);
+    Not(in=In[11], out=notIn11);
+    Not(in=In[12], out=notIn12);
+    Not(in=In[13], out=notIn13);
+    Not(in=In[14], out=notIn14);
+    Not(in=In[15], out=notIn15);
+
+
+
+    // 1. Register control //
+    // Control the MUX that writes in to memory
+    Mux16(a=ALUout, b=fromM, sel=In[15], out=regInput);
+
+    // Control leading 4 bits for memory read
+    And(a=In[15], b=notIn14, out=memOpCode);
+    And(a=notIn13, b=notIn12, out=readOpType);
+    And(a=memOpCode, b=readOpType, out=memRead);
+
+    // Leading 4 bits for the keyboard input
+    And(a=In[15], b=In[14], out=ioOpCode);
+    And(a=In[13], b=notIn12, out=ioOpType);
+    And(a=ioOpCode, b=ioOpType, out=ioInput);
+
+    // Combine the conditions for sel bit of load to register
+    Or(a=memRead, b=ioInput, out=loadRegMemory);
+    Or(a=loadRegMemory, b=notIn15, out=loadReg);
+
+    // DMUX to distribute correct load signal to register
+    DMux8Way(in=loadReg, sel=In[9..11], a=selReg0, b=selReg1, c=selReg2, d=selReg3, e=selReg4, f=selReg5, g=selReg6, h=selReg7);
+
+    // Define and connect registers
+    Register(in=regInput, load=selReg0, out=reg0Output);
+    Register(in=regInput, load=selReg1, out=reg1Output);
+    Register(in=regInput, load=selReg2, out=reg2Output);
+    Register(in=regInput, load=selReg3, out=reg3Output);
+    Register(in=regInput, load=selReg4, out=reg4Output);
+    Register(in=regInput, load=selReg5, out=reg5Output);
+    Register(in=regInput, load=selReg6, out=reg6Output);
+    Register(in=regInput, load=selReg7, out=reg7Output);
+    
+
+
+    // 2. ALU
+    ALU(AluOp=A, x=XInput, y=YInput, AluOut=ALUout, overflow=overflow);
+
+    // In[15:12] for ADD, SUB, NAND, & NOR
+    And(a=notIn15, b=notIn14, out=arithOpCode); // ADD
+    And(a=notIn13, b=notIn12, out=addOpType);
+    And(a=arithOpCode, b=addOpType, out=arithAdd);
+
+    // And(a=notIn15, b=notIn14, out=arithOpCode); // SUB
+    And(a=In[13], b=notIn12, out=subOpType);
+    And(a=arithOpCode, b=subOpType, out=arithSub);
+
+    And(a=notIn15, b=In[14], out=logicalOpCode); // NAND
+    And(a=logicalOpCode, b=notIn13, out=logicalNand);
+
+    And(a=logicalOpCode, b=In[13], out=logicalNor); // NOR
+
+    // In[15:12] for ADDI & SUBI
+    And(a=notIn13, b=In[12], out=addiOpType); // ADDI
+    And(a=arithOpCode, b=addiOpType, out=arithAddi);
+
+    And(a=In[13], b=In[12], out=subiOpType); // SUBI
+    And(a=arithOpCode, b=subiOpType, out=arithSubi);
+
+    // combine them
+    Or(a=arithAdd, b=arithSub, out=arithAddorSub);
+    Or(a=logicalNand, b=logicalNor, out=logicalNandorNor);
+    Or(a=arithAddi, b=arithSubi, out=arithAddiorSubi);
+    Or(a=arithAddorSub, b=logicalNandorNor, out=AddSubNandorNor);
+
+    Or16(
+        a[0]=AddSubNandorNor, 
+        a[1..15]=false,
+        b[0]=arithAddiorSubi, 
+        b[1..15]=false,
+        out[0..3]=A, 
+        out[4..15]=false
+    );
+
+    // XInput and YInput
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[6..8], out=XInput);
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[3..5], out=mux2Output);
+    Mux16(
+        a=mux2Output, 
+        b[0..5]=In[0..5],
+        b[6..15]=false, 
+        sel=In[12], 
+        out=YInput
+    );
+
+
+
+    // 3. Prepare the Memory Address addressM (in case of READ and Write), Memory Data toM (in case of Write or OUT)
+    // toM //
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[6..8], out=toM);
+
+    /* // addressM //
+    // READ address
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[6..8], out=readAddressM);
+
+    // WRITE address (dont fuck with this tati)
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[9..11], out=writeAddressM);
+
+    // INPUT address
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[6..8], out=inputAddressM);
+
+    // keyboard address
+
+    // OUTPUT address
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[6..8], out=outputAddressM);
+    
+    // combine
+    Mux4Way16(a=readAddressM, b=writeAddressM, c=outputAddressM, d=inputAddressM, sel=In[13..14], out=addressM); */
+
+    // check if read
+    Mux4Way16(
+        a=false, // check if opcode is 10 (memory)
+        b=false 
+        c=true, 
+        d=false, 
+        sel=In[14..15], 
+        out=equalsMemOpCode
+    );
+
+    Mux4Way16(
+        a=true, // check if optype is 00 (read)
+        b=false 
+        c=false, 
+        d=false, 
+        sel=In[12..13], 
+        out=equalsMemRead
+    );
+
+    // check if write
+    Mux4Way16(
+        a=false, // check if optype is 10 (write)
+        b=false 
+        c=true, 
+        d=false, 
+        sel=In[12..13], 
+        out=equalsMemWriteType
+    );
+    
+    // check input with keyboard as sel
+    Mux4Way16(
+        a=false, // check if opcode is 11 (i/o)
+        b=false, 
+        c=false, 
+        d=true, 
+        sel=In[14..15], 
+        out=equalsOpcodeIO
+    );
+
+    Mux4Way16(
+        a=false, // check if optype is 10 (input)
+        b=false, 
+        c=true, 
+        d=false, 
+        sel=In[12..13], 
+        out=equalsOptypeInput
+    );
+
+    And16(a=equalsOpcodeIO, b=equalsOptypeInput, out[0]=equalsInput, out[1..15]=false);    // if it equals 1110
+
+    // if input.. destination is keyboard address
+    Mux16(
+        a=false, 
+        b[0]=true, 
+        b[1]=false,
+        b[2]=true,
+        b[3..15]=false,
+        sel=equalsInput, 
+        out=inputAddress
+    );
+
+    // check output
+    Mux4Way16(
+        a=true, // check if optype is 00 (output)
+        b=false, 
+        c=false, 
+        d=false, 
+        sel=In[12..13], 
+        out=equalsOptypeOutput
+    );
+
+    And16(a=equalsOpcodeIO, b=equalsOptypeOutput, out[0]=equalsOutput, out[1..15]=false);    // if it equals 1100 */
+
+
+    // 4. Generate the writeM signal (memory write for RAM or Screen)
+    // writeM is true if it is a Memory Write operation or a Screen OUT operation
+    // And(a=In[15], b=notIn14, out=memOpCode);
+    And(a=In[13], b=notIn12, out=writeOpType);
+    And(a=memOpCode, b=writeOpType, out=memWrite);  // WRITE OPCODE & OPTYPE
+
+    // And(a=In[15], b=In[14], out=ioOpCode);
+    And(a=notIn13, b=notIn12, out=outOpType);
+    And(a=ioOpCode, b=outOpType, out=ioOutput); // OUTPUT OPCODE & OPTYPE
+
+    // writeM //
+    Mux4Way16(
+        a=false, // check if opcode = mem ([15..14] = 10)
+        b=false, 
+        c=true,
+        d=false, 
+        sel[0..1]=In[14..15],
+        out=opCodeEqualsMem
+    ); 
+
+    Mux4Way16(
+        a=false, // check if optype = write ([13..12] = 10)
+        b=false, 
+        c=true, 
+        d=false, 
+        sel[0..1]=In[12..13],
+        out=opTypeEqualsWrite
+    ); 
+
+    And16(  // 1010
+        a=opCodeEqualsMem, 
+        b=opTypeEqualsWrite, 
+        out[0]=equalsMemWrite, 
+        out[1..15]=false
+    );
+
+    // writeM //
+    Mux4Way16(
+        a=false, // check if opcode = input/output ([15..14] = 11)
+        b=false, 
+        c=false, 
+        d=true, 
+        sel[0..1]=In[14..15], 
+        out=opCodeEqualsIO
+    ); 
+
+    Mux4Way16(
+        a=true, // check if optype = output ([13..12] = 00)
+        b=false, 
+        c=false, 
+        d=false, 
+        sel[0..1]=In[12..13], 
+        sel[1]=notIn13,
+        out=opTypeEqualsOutput
+    );   
+    
+    And16(  // 1100
+        a=opCodeEqualsIO,
+        b=opTypeEqualsOutput,
+        out[0]=equalsIoOutput,
+        out[1..15]=false
+    );
+
+    // combine. if equals mem write or equals io output, writeM is active (1010 or 1100)
+    Or(a=equalsMemWrite, b=equalsIoOutput, out=memWriteOrIoOut);
+
+    Mux(a=false, b=true, sel=memWriteOrIoOut, out=writeM);
+
+    // 5. We load the PC with new value if there is a branch
+    // Branch can be conditional or unconditional
+    // Unconditional => In[15..12] = 1011
+    // Conditional => In[15..12] = 1001 && In[8..6]==000
+    // PC //
+    Mux8Way16(a=reg0Output, b=reg1Output, c=reg2Output, d=reg3Output, e=reg4Output, f=reg5Output, g=reg6Output, h=reg7Output, sel=In[9..11], out=PCinput);
+
+    // JMP (In[15..12] = 1011)
+    And(a=In[15], b=notIn14, out=branchOpCode);
+    And(a=In[13], b=In[12], out=jmpOpType);
+    And(a=branchOpCode, b=jmpOpType, out=branchJmp);
+
+    // BEQ (In[15..12] = 1001) AND In[8..6] = 000
+    // And(a=In[15], b=notIn14, out=branchOpCode);
+    And(a=notIn13, b=In[12], out=beqOpType);
+    And(a=branchOpCode, b=beqOpType, out=branchBeq);
+
+    Mux4Way16(
+        a=false, // check if In[15..14] = 10
+        b=false, 
+        c=true, 
+        d=false, 
+        sel[0..1]=In[14..15], 
+        out=equalsBranchOpCode
+    );
+
+    Mux4Way16(
+        a=false, // check if In[13..12] = 11
+        b=false, 
+        c=false, 
+        d=true, 
+        sel[0..1]=In[12..13],
+        out=equalsJmpOpType
+    );
+
+    Mux4Way16(
+        a=false, // check if In[13..12] = 01
+        b=true, 
+        c=false, 
+        d=false, 
+        sel[0..1]=In[12..13],
+        out=equalsBeqOpType
+    );
+    
+    And(a=In[8], b=In[7], out=beqReg87);
+    And(a=beqReg87, b=In[6], out=beqSourceReg);
+
+    Mux8Way16(
+        a=true, // check if In[8..6] = 000
+        b=false, 
+        c=false, 
+        d=false, 
+        e=false, 
+        f=false, 
+        g=false, 
+        h=false, 
+        sel[0..2]=In[6..8], 
+        out=sourceRegEquals000
+    );
+
+    // if In[15..12] = 1011
+    And16(
+        a=equalsBranchOpCode, 
+        b=equalsJmpOpType, 
+        out[0]=equalsBranchJmp,
+        out[1..15]=false
+    );
+
+    // if In[15..12] = 1001 & In[8..6] = 000
+    And16(
+        a=equalsBranchOpCode, 
+        b=equalsBeqOpType, 
+        out=equalsBranchBeq
+    );
+
+    And16(
+        a=equalsBranchBeq, 
+        b=sourceRegEquals000, 
+        out[0]=equalsBranchBeqAndReg000,
+        out[1..15]=false
+    );
+
+    // combine. if in[15..12] = 1001 & in [8..6] = 000 OR in[15..12] = 1011
+    Or(a=equalsBranchJmp, b=equalsBranchBeqAndReg000, out=PCload);
+
+    // check when to increment
+    Mux(
+        a=true, 
+        b=false, 
+        sel=PCload, 
+        out=incrementer
+    );
+
+    PC(in=PCinput, load=PCload, inc=true, reset=Reset, out=PCOut);
+} 
